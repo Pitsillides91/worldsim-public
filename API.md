@@ -1,93 +1,62 @@
-# WorldSim API Documentation
+# WorldSim API
 
-Programmatic access to WorldSim country simulations.
+Run country simulations programmatically. Submit a scenario, poll for results, and download full Monte Carlo distributions.
 
-Base URL: `https://worldsimlab.com/api/v1`
-Interactive docs: https://worldsimlab.com/api/v1/docs
+**Base URL:** `https://worldsimlab.com/api/v1`
+**Interactive docs:** [worldsimlab.com/api/v1/docs](https://worldsimlab.com/api/v1/docs)
 
-## Authentication
+## Getting Started
 
-All requests require a Bearer token in the `Authorization` header:
+### 1. Get your API key
 
-```
-Authorization: Bearer wsim_your_api_key_here
-```
+Log in at [worldsimlab.com](https://worldsimlab.com), go to **Account**, and click **Create Key**. API access requires Institutional tier or above.
 
-API keys are managed from your [Account page](https://worldsimlab.com/billing/account/). Keys are shown once at creation -- copy and store securely.
+### 2. Install dependencies
 
-## Tier Access
-
-| Tier | API Access | Raw MC Paths | Rate Limit | Simulations/Run |
-|------|-----------|-------------|------------|-----------------|
-| Free | No | No | -- | 2,000 |
-| Individual | No | No | -- | 2,000 |
-| Professional | No | No | -- | 5,000 |
-| Institutional | Yes | No | 100 req/hr | 5,000 |
-| Institutional Pro | Yes | No | 700 req/hr | 10,000 |
-| Enterprise | Yes | Yes | 10,000 req/hr | 10,000 |
-
-## Endpoints
-
-### GET /countries/
-
-List all available countries.
-
-**Response:**
-```json
-{
-  "count": 261,
-  "countries": [
-    {"iso3": "DEU", "name": "Germany"},
-    {"iso3": "USA", "name": "United States"}
-  ]
-}
+```bash
+pip install requests pandas pyarrow
 ```
 
-### GET /kpis/
+### 3. Connect
 
-List all 26 KPIs available for bias input, grouped by card.
+```python
+import requests
+import time
 
-**Response:**
-```json
-{
-  "count": 26,
-  "kpis": [
-    {"code": "gdp_per_capita", "card": "Income & Productivity"},
-    {"code": "inflation_rate", "card": "Cost of Living"}
-  ]
-}
+BASE = "https://worldsimlab.com/api/v1"
+
+session = requests.Session()
+session.headers["Authorization"] = "Bearer wsim_your_key_here"
+
+# Verify connection
+resp = session.get(f"{BASE}/countries/")
+print(f"Connected: {resp.json()['count']} countries available")
 ```
 
-### POST /run/
+---
 
-Submit a simulation. Returns immediately with a `run_group_id` for polling.
+## Full Example: Germany to 2050
 
-**Request body:**
-```json
-{
-  "country": "DEU",
-  "horizon": 2050,
-  "path": "average",
-  "biases": {
-    "inflation_rate": {"shift_sigma": 1.0, "persist_years": 5}
-  },
-  "raw_paths": false
-}
+Simulate Germany with a +1 sigma inflation shock that persists for 5 years.
+
+### Step 1: Submit the simulation
+
+```python
+resp = session.post(f"{BASE}/run/", json={
+    "country": "DEU",
+    "horizon": 2050,
+    "path": "average",
+    "biases": {
+        "inflation_rate": {"shift_sigma": 1.0, "persist_years": 5}
+    }
+})
+
+run_id = resp.json()["run_group_id"]
+print(f"Submitted: {run_id}")
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `country` | string | Yes | ISO3 country code (e.g. "DEU", "USA") |
-| `horizon` | int | No | End year: 2030, 2035, 2040, or 2050. Default: 2050 |
-| `path` | string | No | Scenario: "better", "average", or "shock". Default: "average" |
-| `biases` | object | No | KPI bias overrides (Layer 2). Key = KPI code, value = `{shift_sigma, persist_years}` |
-| `raw_paths` | bool | No | Store all MC sample paths as Parquet. Enterprise only. Default: false |
+Response:
 
-**Bias parameters:**
-- `shift_sigma`: Standard deviation shift applied to the KPI baseline. Positive = increase, negative = decrease. Range: typically -3.0 to +3.0.
-- `persist_years`: How many years the bias persists before reverting. 0 = single year.
-
-**Response:**
 ```json
 {
   "run_group_id": "a1b2c3d4-...",
@@ -97,144 +66,207 @@ Submit a simulation. Returns immediately with a `run_group_id` for polling.
 }
 ```
 
-### GET /run/{run_group_id}/
+The engine always runs all 3 paths (better, average, shock) regardless of which one you select. Your path choice determines the primary scenario direction.
 
-Poll for simulation status and results.
+### Step 2: Poll until done
 
-**Status values:** `queued` > `running` > `done` (or `failed`)
-
-**Response (when done):**
-```json
-{
-  "run_group_id": "a1b2c3d4-...",
-  "status": "done",
-  "country": "DEU",
-  "horizon": 2050,
-  "paths": [
-    {"path": "average", "status": "done", "completed_at": "2026-03-31T08:00:00Z"},
-    {"path": "better", "status": "done", "completed_at": "2026-03-31T08:00:01Z"},
-    {"path": "shock", "status": "done", "completed_at": "2026-03-31T08:00:02Z"}
-  ],
-  "output": {
-    "average": {
-      "cards": {},
-      "trajectory_index": {"score": 52.3, "label": "Moderate"},
-      "narrative": {},
-      "monte_carlo_meta": {"n_sims": 5000, "seed": 123456}
-    }
-  }
-}
-```
-
-### GET /run/{run_group_id}/mc/
-
-Get Monte Carlo quantile distributions (P10/P50/P90) per KPI per path.
-
-Enterprise tier also receives `raw_paths_url` links to downloadable Parquet files.
-
-**Response:**
-```json
-{
-  "run_group_id": "a1b2c3d4-...",
-  "raw_paths_included": true,
-  "paths": {
-    "average": {
-      "quantiles": {
-        "gdp_per_capita": {
-          "years": [
-            {"year": 2025, "p10": 45000, "p50": 48000, "p90": 51000},
-            {"year": 2026, "p10": 45500, "p50": 48500, "p90": 52000}
-          ]
-        }
-      },
-      "raw_paths_url": "/media/raw_paths/a1b2c3d4-.../average.parquet"
-    }
-  }
-}
-```
-
-## Raw MC Paths (Enterprise)
-
-When `raw_paths: true` is set, the full Monte Carlo simulation matrix is saved as a Parquet file on the server. The `/mc/` endpoint returns a download URL per path.
-
-**Parquet schema:**
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `kpi` | string | KPI code (e.g. "gdp_per_capita") |
-| `sim_id` | int | Simulation index (0 to n_sims-1) |
-| `year` | int | Year (2025 to horizon) |
-| `value` | float | Simulated value |
-
-**Download example:**
 ```python
-import pandas as pd
+while True:
+    resp = session.get(f"{BASE}/run/{run_id}/")
+    data = resp.json()
+    print(f"Status: {data['status']}")
 
+    if data["status"] in ("done", "failed"):
+        break
+    time.sleep(3)
+```
+
+Typical runtime: 15-25 seconds.
+
+### Step 3: Read the results
+
+```python
+data = session.get(f"{BASE}/run/{run_id}/").json()
+
+for path_name, path_data in data["output"].items():
+    ti = path_data["trajectory_index"]
+    print(f"{path_name:10s}  TI: {ti['score']} ({ti['label']})  |  {len(path_data['cards'])} cards")
+```
+
+```
+average     TI: 48.2 (Moderate)     |  9 cards
+better      TI: 62.1 (Favourable)   |  9 cards
+shock       TI: 31.5 (Challenging)  |  9 cards
+```
+
+Each path contains:
+
+- **cards** -- 9 enriched KPI cards (Income, Cost of Living, Housing, Fiscal, Labor, Demographics, Social, Energy, Technology)
+- **trajectory_index** -- composite score (0-100) with a label
+- **narrative** -- generated scenario narrative
+- **monte_carlo_meta** -- seed, number of simulations
+
+### Step 4: Get Monte Carlo quantiles
+
+```python
 mc = session.get(f"{BASE}/run/{run_id}/mc/").json()
-url = mc["paths"]["average"]["raw_paths_url"]
 
-resp = session.get(f"https://worldsimlab.com{url}")
-with open("paths.parquet", "wb") as f:
-    f.write(resp.content)
+# GDP per capita quantiles for the average path
+gdp = mc["paths"]["average"]["quantiles"]["gdp_per_capita"]["years"]
 
-df = pd.read_parquet("paths.parquet")
-# Pivot to get simulation paths for one KPI
-gdp = df[df["kpi"] == "gdp_per_capita"].pivot(
-    index="year", columns="sim_id", values="value"
-)
+print(f"{'Year':>6}  {'P10':>10}  {'P50':>10}  {'P90':>10}")
+for row in gdp:
+    print(f"{row['year']:>6}  {row['p10']:>10,.0f}  {row['p50']:>10,.0f}  {row['p90']:>10,.0f}")
 ```
 
-## Quick Start (Python)
+```
+  Year         P10         P50         P90
+  2025      46,200      48,400      50,600
+  2030      47,100      51,300      55,800
+  2040      49,500      57,200      66,100
+  2050      51,800      63,400      78,300
+```
+
+P10/P50/P90 are the 10th, 50th, and 90th percentile of the Monte Carlo distribution.
+
+---
+
+## Raw Sample Paths (Enterprise)
+
+Enterprise clients can download the full Monte Carlo simulation matrix as a Parquet file.
 
 ```python
-import requests
-import time
-
-BASE = "https://worldsimlab.com/api/v1"
-s = requests.Session()
-s.headers["Authorization"] = "Bearer wsim_your_key_here"
-
-# 1. Submit
-r = s.post(f"{BASE}/run/", json={
+# Submit with raw_paths=True
+resp = session.post(f"{BASE}/run/", json={
     "country": "DEU",
     "horizon": 2050,
     "path": "average",
-    "biases": {
-        "inflation_rate": {"shift_sigma": 1.0, "persist_years": 5},
-        "unemployment_rate": {"shift_sigma": -0.5, "persist_years": 3}
-    }
-}).json()
-run_id = r["run_group_id"]
+    "raw_paths": True
+})
+run_id = resp.json()["run_group_id"]
 
-# 2. Poll
-while True:
-    r = s.get(f"{BASE}/run/{run_id}/").json()
-    if r["status"] in ("done", "failed"):
-        break
-    time.sleep(3)
+# ... poll until done ...
 
-# 3. Results
-for path, data in r["output"].items():
-    ti = data["trajectory_index"]
-    print(f"{path}: TI={ti['score']} ({ti['label']})")
+# Get download URLs
+mc = session.get(f"{BASE}/run/{run_id}/mc/").json()
+url = mc["paths"]["average"]["raw_paths_url"]
 
-# 4. MC Quantiles
-mc = s.get(f"{BASE}/run/{run_id}/mc/").json()
-gdp_q = mc["paths"]["average"]["quantiles"]["gdp_per_capita"]["years"]
-for row in gdp_q[-5:]:
-    print(f"  {row['year']}: P10={row['p10']:,.0f}  P50={row['p50']:,.0f}  P90={row['p90']:,.0f}")
+# Download and load into pandas
+import pandas as pd
+
+file = session.get(f"https://worldsimlab.com{url}")
+with open("germany_average.parquet", "wb") as f:
+    f.write(file.content)
+
+df = pd.read_parquet("germany_average.parquet")
+print(df.head())
 ```
 
-## Error Responses
+```
+              kpi  sim_id  year      value
+   gdp_per_capita       0  2025  47823.41
+   gdp_per_capita       0  2026  48156.22
+   gdp_per_capita       0  2027  48934.87
+   gdp_per_capita       0  2028  49201.55
+   gdp_per_capita       0  2029  50112.30
+```
 
-| Code | Meaning | Example |
-|------|---------|---------|
-| 400 | Invalid input | Bad country code, invalid horizon, unknown KPI |
-| 401 | Unauthorized | Missing or invalid API key, or tier without API access |
-| 404 | Not found | Unknown run_group_id |
-| 429 | Rate limited | Hourly rate limit exceeded |
+Columns: `kpi`, `sim_id`, `year`, `value`. Each sim_id is one independent simulation path. Use this for custom risk models, VaR calculations, or distribution analysis.
+
+```python
+# Example: GDP distribution at 2050
+gdp = df[df["kpi"] == "gdp_per_capita"].pivot(index="year", columns="sim_id", values="value")
+terminal = gdp.loc[2050]
+print(f"Mean:   {terminal.mean():>10,.0f}")
+print(f"Median: {terminal.median():>10,.0f}")
+print(f"P5:     {terminal.quantile(0.05):>10,.0f}")
+print(f"P95:    {terminal.quantile(0.95):>10,.0f}")
+```
+
+---
+
+## Bias Parameters
+
+Biases shift KPI baselines using the `biases` field in POST /run/.
+
+```python
+"biases": {
+    "inflation_rate": {"shift_sigma": 1.0, "persist_years": 5},
+    "unemployment_rate": {"shift_sigma": -0.5, "persist_years": 3}
+}
+```
+
+- **shift_sigma**: Standard deviations to shift the baseline. +1.0 = one sigma above, -2.0 = two sigma below. Typical range: -3.0 to +3.0.
+- **persist_years**: How long the shift lasts before reverting. 0 = one year only.
+
+Use `GET /kpis/` to see all 26 available KPI codes.
+
+---
+
+## Available Countries
+
+```python
+countries = session.get(f"{BASE}/countries/").json()["countries"]
+# 261 entries: {"iso3": "DEU", "name": "Germany"}, ...
+```
+
+Use the `iso3` code in the `country` field of POST /run/.
+
+## Available KPIs
+
+```python
+kpis = session.get(f"{BASE}/kpis/").json()["kpis"]
+# 26 entries grouped by card
+```
+
+| Card | KPIs |
+|------|------|
+| Income & Productivity | gdp_per_capita |
+| Cost of Living | inflation_rate, electricity_price_household_usd_per_kwh, interest_rate_policy_pct, petrol_price_usd_litre |
+| Housing Affordability | rent_index, price_to_income, price_to_rent |
+| Fiscal & Tax Structure | tax_wedge_avg_worker, gov_expenditure_pct_gdp, gov_revenue_pct_gdp, public_debt_pct_gdp |
+| Labor Market | unemployment_rate, crime_rate_per_100k, ai_displacement_exposure_pct |
+| Demographics | population_share_65_plus, total_fertility_rate, net_migration_rate_per_1000 |
+| Social & Cultural | religion_share_christian, religion_share_muslim, religion_share_hindu, religion_share_other_atheist |
+| Energy | energy_self_sufficiency_pct, renewable_energy_share_pct |
+| Technology | internet_users_pct, rd_expenditure_pct_gdp, high_tech_exports_pct |
+
+## Horizons and Paths
+
+**Horizons:** `2030`, `2035`, `2040`, `2050`
+
+**Paths:**
+
+- **better** -- optimistic scenario
+- **average** -- baseline scenario
+- **shock** -- adverse scenario
+
+---
+
+## Error Handling
+
+```python
+# No auth
+requests.get(f"{BASE}/countries/")                     # 401
+
+# Bad country
+session.post(f"{BASE}/run/", json={"country": "ZZZ"})  # 400
+
+# Bad horizon
+session.post(f"{BASE}/run/", json={"country": "DEU", "horizon": 2099})  # 400
+
+# Unknown KPI in biases
+session.post(f"{BASE}/run/", json={
+    "country": "DEU",
+    "biases": {"fake_kpi": {"shift_sigma": 1}}
+})  # 400
+
+# Run not found
+session.get(f"{BASE}/run/00000000-0000-0000-0000-000000000000/")  # 404
+```
 
 All errors return JSON:
+
 ```json
 {
   "error": "invalid_country",
@@ -242,9 +274,17 @@ All errors return JSON:
 }
 ```
 
-## Rate Limit Headers
+---
 
-Every response includes rate limit headers:
+## Tier Limits
+
+| Tier | API | Raw Paths | Rate Limit | Sims/Run | Runs/Month |
+|------|-----|-----------|------------|----------|------------|
+| Institutional | Yes | No | 100/hr | 5,000 | 1,000 |
+| Institutional Pro | Yes | No | 700/hr | 10,000 | 7,000 |
+| Enterprise | Yes | Yes | 10,000/hr | 10,000 | Unlimited |
+
+Rate limit headers are included in every response:
 
 ```
 X-RateLimit-Limit: 100
