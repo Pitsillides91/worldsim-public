@@ -94,15 +94,15 @@ for path_name, path_data in data["output"].items():
 ```
 
 ```
-average     TI: 48.2 (Moderate)     |  9 cards
-better      TI: 62.1 (Favourable)   |  9 cards
-shock       TI: 31.5 (Challenging)  |  9 cards
+average     TI: 48.2 (Moderate)     |  10 cards
+better      TI: 62.1 (Favourable)   |  10 cards
+shock       TI: 31.5 (Challenging)  |  10 cards
 ```
 
 Each path contains:
 
 - **cards** -- 9 enriched KPI cards (Income, Cost of Living, Housing, Fiscal, Labor, Demographics, Social, Energy, Technology)
-- **trajectory_index** -- composite score (0-100) with a label
+- **trajectory_index** -- composite score (0-100) with label, plus improves/stagnates/stress percentages
 - **narrative** -- generated scenario narrative
 - **monte_carlo_meta** -- seed, number of simulations
 
@@ -135,13 +135,16 @@ P10/P50/P90 are the 10th, 50th, and 90th percentile of the Monte Carlo distribut
 
 Enterprise clients can download the full Monte Carlo simulation matrix as a Parquet file.
 
+Set `raw_paths: true` and choose how many paths with `raw_paths_count` (100 to 10,000, default 1,000). Standard runs always store 500 paths in the database regardless of this setting.
+
 ```python
-# Submit with raw_paths=True
+# Submit with raw_paths and choose path count
 resp = session.post(f"{BASE}/run/", json={
     "country": "DEU",
     "horizon": 2050,
     "path": "average",
-    "raw_paths": True
+    "raw_paths": True,
+    "raw_paths_count": 5000
 })
 run_id = resp.json()["run_group_id"]
 
@@ -185,21 +188,21 @@ print(f"P95:    {terminal.quantile(0.95):>10,.0f}")
 
 ---
 
-## Bias Parameters
+## POST /run/ Reference
 
-Biases shift KPI baselines using the `biases` field in POST /run/.
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `country` | string | Yes | -- | ISO3 country code (e.g. "DEU", "USA") |
+| `horizon` | int | No | 2050 | End year: 2030, 2035, 2040, or 2050 |
+| `path` | string | No | "average" | Scenario: "better", "average", or "shock" |
+| `biases` | object | No | {} | KPI bias overrides. Key = KPI code, value = {shift_sigma, persist_years} |
+| `raw_paths` | bool | No | false | Store MC sample paths as Parquet. Enterprise only |
+| `raw_paths_count` | int | No | 1000 | How many sample paths to store (100 to 10,000). Enterprise only |
 
-```python
-"biases": {
-    "inflation_rate": {"shift_sigma": 1.0, "persist_years": 5},
-    "unemployment_rate": {"shift_sigma": -0.5, "persist_years": 3}
-}
-```
+### Bias parameters
 
 - **shift_sigma**: Standard deviations to shift the baseline. +1.0 = one sigma above, -2.0 = two sigma below. Typical range: -3.0 to +3.0.
 - **persist_years**: How long the shift lasts before reverting. 0 = one year only.
-
-Use `GET /kpis/` to see all 26 available KPI codes.
 
 ---
 
@@ -209,8 +212,6 @@ Use `GET /kpis/` to see all 26 available KPI codes.
 countries = session.get(f"{BASE}/countries/").json()["countries"]
 # 261 entries: {"iso3": "DEU", "name": "Germany"}, ...
 ```
-
-Use the `iso3` code in the `country` field of POST /run/.
 
 ## Available KPIs
 
@@ -282,7 +283,7 @@ All errors return JSON:
 |------|-----|-----------|------------|----------|------------|
 | Institutional | Yes | No | 100/hr | 5,000 | 1,000 |
 | Institutional Pro | Yes | No | 700/hr | 10,000 | 7,000 |
-| Enterprise | Yes | Yes | 10,000/hr | 10,000 | Unlimited |
+| Enterprise | Yes | Yes (100-10k) | 10,000/hr | 10,000 | Unlimited |
 
 Rate limit headers are included in every response:
 
